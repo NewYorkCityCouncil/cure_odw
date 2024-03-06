@@ -1,0 +1,869 @@
+---
+title: "eventStudy_ek"
+author: "Eric Koepcke"
+date: "2023-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("../code/00_load_dependencies.R")
+library(forcats)
+library(sandwich)
+library(lmtest)
+library(stargazer)
+library(MASS)
+library(AER)
+library(zoo)
+library(ggiraph)
+library(htmlwidgets)
+if (Sys.getenv("HOME")=="/Users/ekoepcke") {
+  figPth <- "/Users/ekoepcke/Desktop/DataTeam/Projects/CureViolence/cure_analysis/paper/figuresTables" 
+}
+```
+
+```{r readInData}
+# Read in all data used
+# Shootings
+shootings_historical <-
+ #read.csv("../data/input/NYPD_Shooting_Incident_Data__Historic_-2.csv")
+  fread("https://data.cityofnewyork.us/resource/833y-fsy8.csv?$limit=9999999999999999") %>% clean_names()
+
+shootings_ytd <- 
+  #read.csv("../data/input/NYPD_Shooting_Incident_Data__Year_To_Date_-2.csv")
+  fread("https://data.cityofnewyork.us/resource/5ucz-vwe8.csv?$limit=9999999999999") %>% clean_names()
+
+# Population by precinct
+# precinct_pop <- read.csv("../data/input/nyc_2010pop_2020precincts.csv") %>% clean_names()
+
+# Program dates
+program_dates <- read_excel("../data/input/CMS\ List\ 1.6.22\ for\ NYCC\ .xlsx") %>% clean_names()
+```
+
+```{r shootingsDataCleaning}
+##########################################
+#Shootings data exploration, cleaning
+##########################################
+
+#match format with historical data
+shootings_ytd <- (shootings_ytd %>% 
+                     mutate(statistical_murder_flag = ifelse(statistical_murder_flag=="Y", TRUE, FALSE)))
+
+#append datasets
+shootings <- bind_rows(shootings_ytd, shootings_historical)
+#delete objects
+rm(shootings_ytd, shootings_historical)
+
+#convert missing values to NA
+shootings <- shootings %>% 
+  mutate(loc_of_occur_desc = ifelse(loc_of_occur_desc=="", NA, loc_of_occur_desc),
+         loc_classfctn_desc = ifelse(loc_classfctn_desc %in% c("", "(null)"), NA, loc_classfctn_desc),
+         location_desc = ifelse(location_desc %in% c("NONE", "(null)", ""), NA, location_desc),
+         perp_age_group = ifelse(perp_age_group %in% 
+                                   c("", "(null)", "1020", "1028", "224", "940", "UNKNOWN"), 
+                                 NA, perp_age_group),
+         perp_sex = ifelse(perp_sex %in% c("", "(null)", "U"), NA, perp_sex),
+         perp_race = ifelse(perp_race %in% c("", "(null)", "UNKNOWN"), NA, perp_race),
+         vic_age_group = ifelse(vic_age_group %in% c("1022", "UNKNOWN"), 
+                                 NA, vic_age_group),
+         vic_sex = ifelse(vic_sex=="U", NA, vic_sex),
+         vic_race = ifelse(vic_race=="UNKNOWN", NA, vic_race),
+         geocoded_column = ifelse(geocoded_column=="", NA, geocoded_column)) 
+
+#Change var types
+shootings <- shootings %>% mutate(boro = as.factor(boro),
+                             loc_of_occur_desc = as.factor(loc_of_occur_desc),
+                             jurisdiction_code = as.factor(jurisdiction_code),
+                             loc_classfctn_desc = as.factor(loc_classfctn_desc),
+                             location_desc = as.factor(location_desc),
+                             perp_age_group = as.factor(perp_age_group),
+                             perp_sex = as.factor(perp_sex),
+                             perp_race = as.factor(perp_race),
+                             vic_age_group = as.factor(vic_age_group),
+                             vic_sex = as.factor(vic_sex),
+                             vic_race = as.factor(vic_race)
+                             )
+
+#Changes date column into three variables
+shootings <- (shootings %>% 
+  separate(occur_date, c("year","month","day"), sep="-", remove=FALSE) %>% 
+    mutate(year = as.integer(year), month = as.integer(month), day = as.integer(day)))
+
+#indicator for rows that came from YTD file
+shootings <- (shootings %>% mutate(fromYTD = (year==2023)))
+
+#sort
+shootings <- (shootings %>% arrange(year, month, day))
+
+#number of missing values by variable
+colSums(is.na(shootings))
+
+#There's no duplicates based on all variables
+n_distinct(shootings)
+#incident keys are not unique though
+n_distinct(shootings$incident_key)
+#isolate the duplicates
+temp <- (shootings %>% 
+           mutate(dupKey = (duplicated(incident_key) | duplicated(incident_key, fromLast = TRUE))) %>%
+           filter(dupKey==TRUE) %>% 
+           arrange(incident_key))
+#duplicates do pertain to a particular incident, duplicates 
+#indicate multiple victims according to data notes
+
+#time trend and seasonality in shootings
+shootings %>% count(year)
+shootings %>% count(month)
+
+shootings %>% count(boro)
+
+#shooting occurred in each precinct (77 precincts)
+n_distinct(shootings$precinct)
+
+#~19% result in homicide
+shootings %>% count(statistical_murder_flag)
+
+#a lot of missing values
+shootings %>% count(perp_age_group)
+shootings %>% count(perp_sex)
+shootings %>% count(perp_race)
+shootings %>% count(vic_age_group)
+shootings %>% count(vic_sex)
+shootings %>% count(vic_race)
+
+#create year-month, year-quarter variables
+shootings <- shootings %>% mutate(yr_month = as.yearmon(paste(year, month), format="%Y %m"))
+shootings <- shootings %>% mutate(yr_qtr = as.yearqtr(paste(year, month), format="%Y %m"))
+
+#Collapse data to year-precinct level
+shootings_yr <- shootings %>% group_by(year, precinct) %>% 
+  summarise(boro = first(boro), numShootings = n(),
+            numLethal = sum(statistical_murder_flag)) %>% ungroup()
+shootings_yr <- shootings_yr %>% mutate(numNonlethal = numShootings-numLethal)
+
+#Not every precinct has a shooting in every year
+shootings_yr %>% group_by(year) %>% summarise(n = n_distinct(precinct))
+#Fill in missing year-precincts, i.e., create balanced panel
+shootings_yr <- shootings_yr %>% complete(year,precinct)
+shootings_yr <- shootings_yr %>% arrange(precinct, year)
+#replace NAs with appropriate values
+shootings_yr <- shootings_yr %>% mutate(numShootings = ifelse(is.na(numShootings), 0, numShootings),
+                                        numLethal = ifelse(is.na(numLethal), 0, numLethal),
+                                        numNonlethal = ifelse(is.na(numNonlethal), 0, numNonlethal))
+shootings_yr <- shootings_yr %>% group_by(precinct) %>% fill(boro, .direction="updown") %>% ungroup()
+
+```
+
+```{r setupDataForAnalysis}
+################################ 
+#Setup data for analysis
+################################
+
+########
+#Merge in CURE program data
+
+#Precincts 40,44,67,73,75,114 have multiple rows. In each, it's appropriate to keep the
+#first/earliest row (except for precinct 67)---this keeps the (earliest) fully operational Cure program
+program_dates %>% count(precinct)
+program_dates <- program_dates %>% filter(!(precinct==67 & date_text=='22-Jan'))
+program_dates <- program_dates %>% filter(duplicated(precinct)==FALSE)
+
+# Separate and filter program dates
+program_dates <- program_dates %>% 
+  separate(date_text, c("yearCure","monthCure"),remove=FALSE) %>%
+  mutate(yearCure = as.numeric(paste(20,yearCure,sep="")),
+         monthCure = match(monthCure, c('Jan', 'Feb', 'Mar', 'April', 'May', 'June', 
+                                        'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'))) %>% 
+  mutate(wavesCure=2023-yearCure)
+
+programMerge <- program_dates %>% 
+  dplyr::select(precinct, yearCure, monthCure, wavesCure)
+
+#merge in program info
+shootings_cure <- shootings_yr %>% left_join(programMerge, by=join_by(precinct))
+shootings_cure <- shootings_cure %>% arrange(precinct,year)
+
+#Drop precinct 22---it's Central Park, only saw one shooting there in data
+shootings_cure <- shootings_cure %>% filter(precinct!=22)
+
+#Flag Cure precincts
+shootings_cure <- shootings_cure %>% mutate(curePrecinct = !is.na(yearCure))
+
+#Flag early, mid, late adopters to explore spillover effects
+shootings_cure <- shootings_cure %>% 
+  mutate(earlyCure = (curePrecinct & yearCure < 2015),
+         midCure = (curePrecinct & yearCure %in% c(2015, 2016)),
+         lateCure = (curePrecinct & yearCure >= 2019))
+        
+#Flag whether Cure is "on" or not
+shootings_cure <- shootings_cure %>% 
+  mutate(cureOn = (curePrecinct & year>=yearCure))
+
+#Flag control precincts that are touching Cure precincts and, thus,
+#may be affected by spillovers and might not be appropriate controls
+shootings_cure <- shootings_cure %>% 
+  mutate(controlSO = (precinct %in% c(19,26,28,30,33,41,45,49,50,61,62,63,66,72,78,83,
+                                      84,90,100,102,104,106,107,108,111,115,121,122)))
+
+#To explore spillovers, for each precinct that's touching a Cure 
+#precinct (not including itself), create "spillover treatment" date set to the
+#earliest yearCure for any Cure precinct touching it
+shootings_cure <- shootings_cure %>% 
+  mutate(yearSO = ifelse(precinct %in% c(67,69,71,73,78,79,81,83,88,102,104,106), 2012, NA)) %>%
+  mutate(yearSO = ifelse(precinct %in% c(41,42,44,103,105), 2013, yearSO)) %>% 
+  mutate(yearSO = ifelse(precinct %in% c(121,122), 2014, yearSO)) %>%
+  mutate(yearSO = ifelse(precinct %in% c(40,43,46,48,52,75,77,90,100), 2015, yearSO)) %>%
+  mutate(yearSO = ifelse(precinct %in% c(19,25,26,28,30,33,45,49,50,61,62,108,115), 2016, yearSO)) %>%
+  mutate(yearSO = ifelse(precinct %in% c(23,32,47,84), 2019, yearSO)) %>%
+  mutate(yearSO = ifelse(precinct %in% c(63,66,70,72,107,111,113), 2021, yearSO))
+
+#Flag whether "spillover treatment" is "on" or not
+shootings_cure <- shootings_cure %>% 
+  mutate(spilloverOn = (!is.na(yearSO) & year>=yearSO))
+
+#run this line if want to use min(yearCure, yearSO) as the ``treatment date''
+# shootings_cure <- shootings_cure %>%
+#   mutate(yearCure = ifelse(curePrecinct & !is.na(yearSO) & yearSO<yearCure, yearSO, yearCure))
+
+#Create event-time variables
+shootings_cure <- shootings_cure %>% 
+  mutate(year_offset = year-yearCure,
+         year_offsetSO = year-yearSO)
+shootings_cure %>% count(year_offset)
+shootings_cure %>% count(year_offsetSO)
+
+shootings_cure <- shootings_cure %>% 
+  mutate(yrPostCure = ifelse(is.na(year_offset) | year_offset<0, 0, year_offset))
+shootings_cure <- shootings_cure %>% 
+  mutate(yrPostSO = ifelse(is.na(year_offsetSO) | year_offsetSO<0, 0, year_offsetSO))
+
+#Create indicators for event study regressions
+#lb is the lower bound for lags
+#ub is the upper bound for leads
+#must have lb < 0, ub > 0
+genIndicators <- function(lb, ub) {
+  temp <- shootings_cure
+  for (i in lb:ub) {
+    if (i <= 0) {
+      j <- i*-1
+      newVar <- paste0('lag',j)
+    } else {
+      newVar <- paste0('lead',i)
+    }
+
+    #for lb "accumulate" lags before it, for ub "accumlate" the leads above it
+    if (i > lb & i < ub) {
+      temp <- temp %>% 
+        mutate(!!sym(newVar) := (!is.na(year_offset) & year_offset==i))
+    } else if (i==lb) {
+      temp <- temp %>% 
+        mutate(!!sym(newVar) := (!is.na(year_offset) & year_offset<=lb))
+        
+    } else {
+      temp <- temp %>% 
+        mutate(!!sym(newVar) := (!is.na(year_offset) & year_offset>=ub))
+    }
+  }
+  return(temp)
+}
+#similar function for "spillover treatment" lags/leads
+genIndicatorsSO <- function(lb, ub) {
+  temp <- shootings_cure
+  for (i in lb:ub) {
+    if (i <= 0) {
+      j <- i*-1
+      newVarSO <- paste0('lagSO',j)
+    } else {
+      newVarSO <- paste0('leadSO',i)
+    }
+
+    #for lb "accumulate" lags before it, for ub "accumlate" the leads above it
+    if (i > lb & i < ub) {
+      temp <- temp %>% 
+        mutate(!!sym(newVarSO) := (!is.na(year_offsetSO) & year_offsetSO==i))
+    } else if (i==lb) {
+      temp <- temp %>% 
+        mutate(!!sym(newVarSO) := (!is.na(year_offsetSO) & year_offsetSO<=lb))
+        
+    } else {
+      temp <- temp %>% 
+        mutate(!!sym(newVarSO) := (!is.na(year_offsetSO) & year_offsetSO>=ub))
+    }
+  }
+  return(temp)
+}
+#Can play around here with how many lags/leads to include
+shootings_cure <- genIndicators(-6, 3)
+shootings_cure <- genIndicatorsSO(-6, 3)
+
+#merge in population data
+# popMerge <- precinct_pop %>% dplyr::select(precinct_2020, p0010001) %>% 
+#   rename(precinct=precinct_2020,pop=p0010001)
+# shootings_cure <- shootings_cure %>% left_join(popMerge, by=join_by(precinct))
+# #Create shootings per 10,000 people var
+# shootings_cure <- shootings_cure %>% mutate(numShootingsPP = (numShootings/pop)*10000)
+# summary(shootings_cure$numShootingsPP)
+
+#Flag pre-2021 cure precincts
+#shootings_cure <- shootings_cure %>% mutate(curePre2020 = (curePrecinct & yearCure!=2021))
+```
+
+```{r cureRegressionsFiguresTables}
+#############
+#Functions
+#############
+
+#event study regression for Cure effects
+#Can change code based on how many lags/leads you're using
+#Can choose which period to use as the leave-out/reference period, most common
+#choice is lag1. Can also use multiple reference periods
+cureESReg <- function(df_analysis) {
+  # model <- lm(numShootings ~ factor(precinct) + factor(year) + lag6 + lag5 + lag4 +
+  #               lag3 + lag2 + lag0 + lead1 + lead2 + lead3, data=df_analysis)
+  model <- glm(numShootings ~ factor(precinct) + factor(year) + lag6 + lag5 + lag4 +
+              lag3 + lag2 + lag0 + lead1 + lead2 + lead3, data=df_analysis, family='poisson')
+  # model <- glm.nb(numShootings ~ factor(precinct) + factor(year) + lag6 + lag5 + lag4 +
+  #             lag3 + lag2 + lag0 + lead1 + lead2 + lead3, data=df_analysis)
+  
+  return(model)
+}
+
+#create Cure ES figure
+#Need to modify if changed number of lags/leads or reference period(s)
+cureESFig <- function(model, figName) {
+  #extract robust SEs for lags/leads
+  robust_se <- sqrt(diag(vcovHC(model, type = "HC1")))
+  robust_se <- tail(robust_se,9)
+  
+  #get coefficients and CIs for lags/leads
+  coefs <- coef(summary(model))
+  coefs <- tail(coefs, 9)
+  coefs[, "Std. Error"] <- robust_se
+  coef_df <- data.frame(
+    variable = rownames(coefs),
+    estimate = exp(coefs[, "Estimate"])-1,
+    lowerCI = exp(coefs[, "Estimate"] - 1.96*coefs[, "Std. Error"])-1,
+    upperCI = exp(coefs[, "Estimate"] + 1.96*coefs[, "Std. Error"])-1
+  )
+  
+  #add row for leave-out/reference period
+  coef_df <- rbind(coef_df, c('lag1TRUE', 0, 0, 0))
+  coef_df <- coef_df %>% mutate(estimate=as.numeric(estimate),
+                                lowerCI=as.numeric(lowerCI),
+                                upperCI=as.numeric(upperCI))
+  
+  #do below to plot coefficients in the right order
+  coef_df <- coef_df %>%
+    mutate(variable = fct_relevel(variable, 'lag6TRUE','lag5TRUE','lag4TRUE','lag3TRUE',
+                                  'lag2TRUE', 'lag1TRUE', 'lag0TRUE','lead1TRUE',
+                                  'lead2TRUE','lead3TRUE'))
+  
+  #Plot coefficients with 95% CIs
+  xlabs <- c('<= -6','-5','-4','-3','-2','-1','0','1','2','>= 3')
+  plt <- ggplot(data = coef_df, aes(x=variable, y=estimate, group=1)) +
+    geom_errorbar(aes(ymin=lowerCI,ymax=upperCI), width=0.2, color='blue',alpha=0.2) +
+    geom_point_interactive(aes(tooltip=paste0(round(estimate*100,digits=1),"%")),size=3) +
+    geom_line()+
+    geom_hline(yintercept=0, color='black', alpha=0.5) +
+    geom_vline(xintercept = 7, linetype='dashed', color='black',alpha=0.5) +
+    labs(x="Years since Cure Implementation", y="Change in Shootings") +
+    scale_x_discrete(labels=xlabs)+
+    scale_y_continuous(labels = percent_format())+
+    theme_nycc()
+  saveWidget(girafe(ggobj=plt),file.path(figPth,paste0(figName,".html")))
+  ggsave(file.path(figPth,paste0(figName,".png")), plt, width=5, height=4, units="in")
+  
+  return(plt)
+}
+
+#create Cure ES latex table
+#Need to modify is use different lags/leads, reference period(s)
+cureESTable <- function(model, tabName) {
+  #robust SEs
+  robust_se <- sqrt(diag(vcovHC(model, type = "HC1")))
+  #keep treatment coeffs
+  end <- length(coef(model))-1
+  start <- end-8
+  
+  stargazer(model, type='latex', style='aer', out=file.path(figPth,paste0(tabName,".tex")),
+          covariate.labels=c('<=6 years pre-Cure','5 years pre-Cure','4 years pre-Cure',
+                             '3 years pre-Cure','2 years pre-Cure','Cure start year',
+                             '1 year post-Cure','2 years post-Cure','>=3 years post-Cure'),
+          dep.var.labels=c('Log Change in Shootings'), align=TRUE, df=FALSE, header=FALSE,
+          keep=c(start:end), keep.stat=c('n'), no.space=TRUE, notes=NULL, omit.table.layout='n',
+          star.cutoffs = c(0.1,0.05,0.01), se=list(robust_se))
+}
+
+cureBinaryReg <- function(df_analysis) {
+  #Binary Cure treatment model
+  model1 <- glm(numShootings ~ factor(precinct) + factor(year) + cureOn, 
+                data=df_analysis, family='poisson')
+  #model1 <- lm(numShootings ~ factor(precinct) + factor(year) + cureOn, data=df_analysis)
+  #model1 <- glm.nb(numShootings ~ factor(precinct) + factor(year) + cureOn, data=df_analysis)
+  
+  return(model1)
+}
+cureLinearReg <- function(df_analysis) {
+  #Linear dynamic Cure effects
+  model2 <- glm(numShootings ~ factor(precinct) + factor(year) + cureOn +
+                yrPostCure, data=df_analysis, family='poisson')
+  # model2 <- lm(numShootings ~ factor(precinct) + factor(year) + cureOn +
+  #               yrPostCure, data=df_analysis)
+  # model2 <- glm.nb(numShootings ~ factor(precinct) + factor(year) + cureOn +
+  #               yrPostCure, data=df_analysis)
+  
+  return(model2)
+}
+cureQuadraticReg <- function(df_analysis) {
+  #Quadratic dynamic Cure effects
+  model3 <- glm(numShootings ~ factor(precinct) + factor(year) + cureOn +
+                yrPostCure + I(yrPostCure^2), data=df_analysis, family='poisson')
+  # model3 <- lm(numShootings ~ factor(precinct) + factor(year) + cureOn +
+  #               yrPostCure + I(yrPostCure^2), data=df_analysis)
+  # model3 <- glm.nb(numShootings ~ factor(precinct) + factor(year) + cureOn +
+  #               yrPostCure + I(yrPostCure^2), data=df_analysis)
+  
+  return(model3)
+}
+
+cureDIDTables <- function(model1, model2, model3, tabName) {
+  #robust SEs
+  robust_se1 <- sqrt(diag(vcovHC(model1, type = "HC1")))
+  robust_se2 <- sqrt(diag(vcovHC(model2, type = "HC1")))
+  robust_se3 <- sqrt(diag(vcovHC(model3, type = "HC1")))
+  #keep treatment coeffs
+  end <- length(coef(model3))
+  start <- end-3
+  
+  stargazer(list(model1,model2,model3), type='latex', style='aer',
+          out=file.path(figPth,paste0(tabName,".tex")),
+          covariate.labels=c('Cure Implemented', 'Years of Cure', 'Years of Cure Sq.'),
+          dep.var.labels=c('Log Change in Shootings'), align=TRUE, df=FALSE, header=FALSE,
+          keep=c(start:end), keep.stat=c('n'), no.space=TRUE, notes=NULL, omit.table.layout='n',
+          star.cutoffs = c(0.1,0.05,0.01), se=list(robust_se1,robust_se2,robust_se3))
+}
+
+#########################
+#Create figures/tables
+#Subset to desired sample
+#########################
+
+#All precincts
+df_analysis <- shootings_cure
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "mainPoisES")
+cureESTable(model, "mainPoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "mainPoisDIDs")
+
+#Pre-2020/Covid shootings data, controls and pre-2019 Cure precincts 
+df_analysis <- shootings_cure %>% filter(year<2020 & (!curePrecinct | (curePrecinct & !lateCure)))
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "preCovidPoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "preCovidPoisDIDs")
+
+#Controls and pre-2020 Cure precincts
+# df_analysis <- shootings_cure %>% filter(!curePrecinct | curePre2020)
+
+#Only include Cure precincts
+df_analysis <- shootings_cure %>% filter(curePrecinct)
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "onlyCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "onlyCurePoisDIDs")
+
+#Controls and 2012-2014 cure precincts
+df_analysis <- shootings_cure %>% filter(!curePrecinct | earlyCure)
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "earlyCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "earlyCurePoisDIDs")
+
+#Controls and 2015-2016 cure precincts
+df_analysis <- shootings_cure %>% filter(!curePrecinct | midCure)
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "midCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "midCurePoisDIDs")
+
+#Controls and 2019-21 cure precincts
+df_analysis <- shootings_cure %>% filter(!curePrecinct | lateCure)
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "lateCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "lateCurePoisDIDs")
+
+#Controls and pre-2019 cure precincts
+df_analysis <- shootings_cure %>% filter(!curePrecinct | earlyCure | midCure)
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "pre2019CurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "pre2019CurePoisDIDs")
+
+#Controls and post-2014 cure precincts
+# df_analysis <- shootings_cure %>% filter(!curePrecinct | midCure | lateCure)
+
+#Non-SO controls and Cure precincts
+df_analysis <- shootings_cure %>% filter((!curePrecinct & !controlSO) | curePrecinct)
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "NonSOControlsPoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "NonSOControlsPoisDIDs")
+
+#Non-SO controls and cure precincts with yearSO<yearCure
+df_analysis <- shootings_cure %>%
+  filter((!curePrecinct & !controlSO)  | (curePrecinct & !is.na(yearSO) & yearSO<yearCure))
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "NonSOControls_SOBeforeCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "NonSOControls_SOBeforeCurePoisDIDs")
+
+#Non-SO controls and cure precincts with yearSO>yearCure
+df_analysis <- shootings_cure %>%
+  filter((!curePrecinct & !controlSO)  | (curePrecinct & !is.na(yearSO) & yearSO>yearCure))
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "NonSOControls_SOAfterCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "NonSOControls_SOAfterCurePoisDIDs")
+
+#Non-SO controls and non-SO Cure units
+df_analysis <- shootings_cure %>%
+  filter((!curePrecinct & !controlSO) | (curePrecinct & is.na(yearSO)))
+model <- cureESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+cureESFig(model, "NonSOControls_NonSOCurePoisES")
+model1 <- cureBinaryReg(df_analysis)
+model2 <- cureLinearReg(df_analysis)
+model3 <- cureQuadraticReg(df_analysis)
+cureDIDTables(model1, model2, model3, "NonSOControls_NonSOCurePoisDIDs")
+```
+
+```{r spilloverRegressionsFiguresTables}
+#############
+#Functions
+#############
+
+#event study regression for Spillover effects
+spilloverESReg <- function(df_analysis) {
+  # model <- lm(numShootings ~ factor(precinct) + factor(year) + lagSO6 + lagSO5 + lagSO4 +
+  #               lagSO3 + lagSO2 + lagSO0 + leadSO1 + leadSO2 + leadSO3, data=df_analysis)
+  model <- glm(numShootings ~ factor(precinct) + factor(year) + lagSO6 + lagSO5 + lagSO4 +
+               lagSO3 + lagSO2 + lagSO0 + leadSO1 + leadSO2 + leadSO3, data=df_analysis, family='poisson')
+  # model <- glm.nb(numShootings ~ factor(precinct) + factor(year) + lagSO6 + lagSO5 + lagSO4 +
+  #              lagSO3 + lagSO2 + lagSO0 + leadSO1 + leadSO2 + leadSO3 , data=df_analysis)
+  
+  return(model)
+}
+
+#create spillover ES figure
+spilloverESFig <- function(model, figName) {
+  #extract robust SEs for lags/leads
+  robust_se <- sqrt(diag(vcovHC(model, type = "HC1")))
+  robust_se <- tail(robust_se,9)
+  
+  #get coefficients and CIs for lags/leads
+  coefs <- coef(summary(model))
+  coefs <- tail(coefs, 9)
+  coefs[, "Std. Error"] <- robust_se
+  coef_df <- data.frame(
+    variable = rownames(coefs),
+    estimate = exp(coefs[, "Estimate"])-1,
+    lowerCI = exp(coefs[, "Estimate"] - 1.96*coefs[, "Std. Error"])-1,
+    upperCI = exp(coefs[, "Estimate"] + 1.96*coefs[, "Std. Error"])-1
+  )
+  
+  #add row for leave-out/reference period
+  coef_df <- rbind(coef_df, c('lagSO1TRUE', 0, 0, 0))
+  coef_df <- coef_df %>% mutate(estimate=as.numeric(estimate),
+                                lowerCI=as.numeric(lowerCI),
+                                upperCI=as.numeric(upperCI))
+  
+  #do below to plot coefficients in the right order
+  coef_df <- coef_df %>%
+    mutate(variable = fct_relevel(variable, 'lagSO6TRUE','lagSO5TRUE','lagSO4TRUE','lagSO3TRUE',
+                                  'lagSO2TRUE', 'lagSO1TRUE', 'lagSO0TRUE','leadSO1TRUE',
+                                  'leadSO2TRUE','leadSO3TRUE'))
+  
+  #Plot coefficients with 95% CIs
+  xlabs <- c('<= -6','-5','-4','-3','-2','-1','0','1','2','>= 3')
+  plt <- ggplot(data = coef_df, aes(x=variable, y=estimate, group=1)) +
+    geom_errorbar(aes(ymin=lowerCI,ymax=upperCI), width=0.2, color='blue',alpha=0.2) +
+    geom_point_interactive(aes(tooltip=paste0(round(estimate*100,digits=1),"%")),size=3) +
+    geom_line()+
+    geom_hline(yintercept=0, color='black', alpha=0.5) +
+    geom_vline(xintercept = 7, linetype='dashed', color='black',alpha=0.5) +
+    labs(x="Years since Potential Spillover", y="Change in Shootings") +
+    scale_x_discrete(labels=xlabs)+
+    scale_y_continuous(labels = percent_format())+
+    theme_nycc()
+  saveWidget(girafe(ggobj=plt),file.path(figPth,paste0(figName,".html")))
+  ggsave(file.path(figPth,paste0(figName,".png")), plt, width=5, height=4, units="in")
+  
+  return(plt)  
+}
+
+#create spillover ES latex table
+spilloverESTable <- function(model, tabName) {
+  #robust SEs
+  robust_se <- sqrt(diag(vcovHC(model, type = "HC1")))
+  #keep treatment coeffs
+  end <- length(coef(model))-1
+  start <- end-8
+  
+  stargazer(model, type='latex', style='aer', out=file.path(figPth,paste0(tabName,".tex")),
+          covariate.labels=c('<=6 years pre-Spillover','5 years pre-Spillover','4 years pre-Spillover',
+                             '3 years pre-Spillover','2 years pre-Spillover','Spillover start year',
+                             '1 year post-Spillover','2 years post-Spillover','>=3 years post-Spillover'),
+          dep.var.labels=c('Log Change in Shootings'), align=TRUE, df=FALSE, header=FALSE,
+          keep=c(start:end), keep.stat=c('n'), no.space=TRUE, notes=NULL, omit.table.layout='n',
+          star.cutoffs = c(0.1,0.05,0.01), se=list(robust_se))
+}
+
+spilloverBinaryReg <- function(df_analysis) {
+  #Binary spillover treatment model
+  model1 <- glm(numShootings ~ factor(precinct) + factor(year) + spilloverOn, 
+                data=df_analysis, family='poisson')
+  #model1 <- lm(numShootings ~ factor(precinct) + factor(year) + spilloverOn, data=df_analysis)
+  
+  # model1 <- glm.nb(numShootings ~ factor(precinct) + factor(year) + spilloverOn, data=df_analysis)
+  
+  return(model1)
+}
+spilloverLinearReg <- function(df_analysis) {
+  #Linear dynamic spillover effects
+  model2 <- glm(numShootings ~ factor(precinct) + factor(year) + spilloverOn + yrPostSO,
+                data=df_analysis, family='poisson')
+  # model2 <- lm(numShootings ~ factor(precinct) + factor(year) + spilloverOn +
+  #               yrPostSO, data=df_analysis)
+  # model2 <- glm.nb(numShootings ~ factor(precinct) + factor(year) + spilloverOn + yrPostSO, 
+  #               data=df_analysis)
+  
+  return(model2)
+}
+spilloverQuadraticReg <- function(df_analysis) {
+  #Quadratic dynamic spillover effects
+  model3 <- glm(numShootings ~ factor(precinct) + factor(year) + spilloverOn + 
+                  yrPostSO + I(yrPostSO^2), data=df_analysis, family='poisson')
+  # model3 <- lm(numShootings ~ factor(precinct) + factor(year) + spilloverOn +
+  #               yrPostSO + I(yrPostSO^2), data=df_analysis)
+  # model3 <- glm.nb(numShootings ~ factor(precinct) + factor(year) + spilloverOn + 
+  #                 yrPostSO + I(yrPostSO^2), data=df_analysis)
+  
+  return(model3)
+}
+
+spilloverDIDTables <- function(model1, model2, model3, tabName) {
+  #robust SEs
+  robust_se1 <- sqrt(diag(vcovHC(model1, type = "HC1")))
+  robust_se2 <- sqrt(diag(vcovHC(model2, type = "HC1")))
+  robust_se3 <- sqrt(diag(vcovHC(model3, type = "HC1")))
+  #keep treatment coeffs
+  end <- length(coef(model3))
+  start <- end-3
+  
+  stargazer(list(model1,model2,model3), type='latex', style='aer',
+          out=file.path(figPth,paste0(tabName,".tex")),
+          covariate.labels=c('Spillover Possible', 'Years of Spillover', 'Years of Spillover Sq.'),
+          dep.var.labels=c('Log Change in Shootings'), align=TRUE, df=FALSE, header=FALSE,
+          keep=c(start:end), keep.stat=c('n'), no.space=TRUE, notes=NULL, omit.table.layout='n',
+          star.cutoffs = c(0.1,0.05,0.01), se=list(robust_se1,robust_se2,robust_se3))
+}
+
+#########################
+#Create figures/tables
+#subset to desired sample
+#########################
+
+# Controls and cure precincts with yearSO<yearCure
+df_analysis <- shootings_cure %>%
+  filter(!curePrecinct | (curePrecinct & !is.na(yearSO) & yearSO<yearCure))
+model <- spilloverESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+spilloverESFig(model, "SOBeforeCurePoisSOES")
+model1 <- spilloverBinaryReg(df_analysis)
+model2 <- spilloverLinearReg(df_analysis)
+model3 <- spilloverQuadraticReg(df_analysis)
+spilloverDIDTables(model1, model2, model3, "SOBeforeCurePoisSODIDs")
+
+#Only control units
+df_analysis <- shootings_cure %>% filter(!curePrecinct)
+model <- spilloverESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+spilloverESFig(model, "onlyControlsPoisSOES")
+model1 <- spilloverBinaryReg(df_analysis)
+model2 <- spilloverLinearReg(df_analysis)
+model3 <- spilloverQuadraticReg(df_analysis)
+spilloverDIDTables(model1, model2, model3, "onlyControlsPoisSODIDs")
+
+#Non-SO controls and cure precincts with yearSO<yearCure
+df_analysis <- shootings_cure %>%
+  filter((!curePrecinct & !controlSO)  | (curePrecinct & !is.na(yearSO) & yearSO<yearCure))
+model <- spilloverESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+spilloverESFig(model, "NonSOControls_SOBeforeCurePoisSOES")
+model1 <- spilloverBinaryReg(df_analysis)
+model2 <- spilloverLinearReg(df_analysis)
+model3 <- spilloverQuadraticReg(df_analysis)
+spilloverDIDTables(model1, model2, model3, "NonSOControls_SOBeforeCurePoisSODIDs")
+
+#Non-SO controls and cure precincts with yearSO>yearCure
+df_analysis <- shootings_cure %>%
+  filter((!curePrecinct & !controlSO)  | (curePrecinct & !is.na(yearSO) & yearSO>yearCure))
+model <- spilloverESReg(df_analysis)
+coeftest(model, vcov=vcovHC(model, type='HC1'))
+spilloverESFig(model, "NonSOControls_SOAfterCurePoisSOES")
+model1 <- spilloverBinaryReg(df_analysis)
+model2 <- spilloverLinearReg(df_analysis)
+model3 <- spilloverQuadraticReg(df_analysis)
+spilloverDIDTables(model1, model2, model3, "NonSOControls_SOAfterCurePoisSODIDs")
+```
+
+```{r additionalFigures}
+#histogram of shootings across time
+# shootings %>% ggplot(aes(x=yr_month)) + geom_histogram(bins=207, color="white", fill="blue")
+
+#Number of shootings by year
+temp <- shootings %>% group_by(year) %>% summarise(numShootings = n())
+summary(temp$numShootings)
+plt <- ggplot(data=temp, aes(x=year, y=numShootings)) +
+  geom_line() +
+  geom_point_interactive(aes(tooltip=numShootings), size=2) +
+  ylim(500,2500)+
+  labs(x="Year", y="Number of Shootings") +
+  theme_nycc()
+saveWidget(girafe(ggobj=plt),file.path(figPth,"numShootings_byYear.html"))
+ggsave(file.path(figPth,"numShootings_byYear.png"), plt, width=5, height=4, units="in")
+
+#Plot histogram of Cure implementation years
+temp <- shootings_cure %>% filter(curePrecinct) %>% group_by(precinct) %>%
+  summarise(yearCure = first(yearCure))
+plt <- ggplot(data=temp, aes(x=yearCure)) + 
+  geom_histogram_interactive(aes(tooltip=after_stat(count)),binwidth=1, color='white', 
+                             fill='blue', alpha=0.6) +
+  xlim(2010,2023)+
+  ylim(0,8)+
+  labs(x='Year', y='Number of Precincts')+
+  theme_nycc()
+saveWidget(girafe(ggobj=plt),file.path(figPth, "cureDateHist.html"))
+ggsave(file.path(figPth,"cureDateHist.png"), plt, width=5, height=3, units="in")
+  
+#Plot average number of shootings (precinct level) by year for cure and non-cure precincts
+temp <- shootings_cure %>% group_by(curePrecinct, year) %>% summarise(numShootings = mean(numShootings))
+summary(shootings_cure$numShootings)
+by(temp$numShootings, temp$curePrecinct, summary)
+plt <- ggplot(data=temp, aes(x=year, y=numShootings, color=curePrecinct)) +
+  geom_line() +
+  geom_point_interactive(aes(tooltip=round(numShootings,digits=0)), size=2) +
+  ylim(0,70)+
+  labs(x="Year", y="Number of Shootings", color="") +
+  scale_color_manual(values=c('red','blue'),labels=c("Control", 'Cure'))+
+  theme_nycc()
+saveWidget(girafe(ggobj=plt),file.path(figPth,"numShootings_byCure.html"))
+ggsave(file.path(figPth,"numShootings_byCure.png"), plt, width=5, height=4, units="in")
+
+#Plot LOG average number of shootings (precinct level) by year for cure and non-cure precincts
+temp <- shootings_cure %>% group_by(curePrecinct, year) %>% summarise(logNumShootings = log(mean(numShootings)))
+plt <- ggplot(data=temp, aes(x=year, y=logNumShootings, color=curePrecinct)) +
+  geom_line() +
+  geom_point_interactive(aes(tooltip=round(logNumShootings,digits=0)), size=2) +
+  ylim(0,5)+
+  labs(x="Year", y="Log Number of Shootings", color="") +
+  scale_color_manual(values=c('red','blue'),labels=c("Control", 'Cure'))+
+  theme_nycc()
+saveWidget(girafe(ggobj=plt),file.path(figPth,"logNumShootings_byCure.html"))
+ggsave(file.path(figPth,"logNumShootings_byCure.png"), plt, width=5, height=4, units="in")
+
+#Plot avg shootings by year for early, mid, late Cure precincts
+temp1 <- shootings_cure %>% filter(earlyCure) %>% group_by(year) %>% summarise(numShootings = mean(numShootings))
+temp2 <- shootings_cure %>% filter(midCure) %>% group_by(year) %>% summarise(numShootings = mean(numShootings))
+temp3 <- shootings_cure %>% filter(lateCure) %>% group_by(year) %>% summarise(numShootings = mean(numShootings))
+plt <- ggplot() +
+  geom_line(data=temp1, aes(x=year, y=numShootings),color='red')+
+  geom_point_interactive(data=temp1, aes(x=year,y=numShootings,color='2012-14',
+                                         tooltip=round(numShootings,digits=0)), size=2) +
+  geom_line(data=temp2, aes(x=year, y=numShootings),color='blue')+
+  geom_point_interactive(data=temp2, aes(x=year, y=numShootings,color='2015-16',
+                                         tooltip=round(numShootings,digits=0)), size=2) +
+  geom_line(data=temp3, aes(x=year, y=numShootings),color='darkgreen')+
+  geom_point_interactive(data=temp3, aes(x=year, y=numShootings,color='2019-21',
+                                         tooltip=round(numShootings,digits=0)), size=2) +
+  ylim(0,80)+
+  labs(x="Year", y="Number of Shootings",color='') +
+  scale_color_manual(values=c('red','blue','darkgreen'),labels=c("2012-14", '2015-16','2019-21'))+
+  theme_nycc()
+saveWidget(girafe(ggobj=plt),file.path(figPth,"numShootings_byYearCure.html"))
+ggsave(file.path(figPth,"numShootings_byYearCure.png"), plt, width=5, height=4, units="in")
+  
+#Plot average number of shootings (precinct level) by year for control precincts, those
+#touching vs. not touching any Cure precincts
+temp <- shootings_cure %>% filter(!curePrecinct) %>% 
+  group_by(controlSO, year) %>% summarise(numShootings = mean(numShootings))
+plt <- ggplot(data=temp, aes(x=year, y=numShootings, color=controlSO)) +
+  geom_line()+
+  geom_point_interactive(aes(tooltip=round(numShootings,digits=0)), size=2) +
+  ylim(0,20)+
+  labs(x="Year", y="Number of Shootings",
+       color="") +
+  scale_color_manual(values=c('red','blue'),labels=c("Non-Spillover", 'Spillover'))+
+  theme_nycc()
+saveWidget(girafe(ggobj=plt),file.path(figPth,"numShootings_byControlSO.html"))
+ggsave(file.path(figPth,"numShootings_byControlSO.png"), plt, width=5, height=4, units="in")
+
+#For Cure precincts, plot true and counterfactual (predicted) num. of shootings
+#get Cure precinct counterfactual, filter out data for cure/spillover precincts after they've been 
+#exposed to Cure (possibly via spillover)
+# temp <- shootings_cure %>% 
+#   filter(!((curePrecinct | controlSO) & (cureOn | spilloverOn)))
+# #Just estimate the precinct and year FEs. Year FEs for later years are now
+# #being solely estimated by pure control precincts. Precinct FEs are being estimated
+# #using data from years prior to any Cure exposure
+# model <- lm(numShootings ~ factor(precinct) + factor(year), 
+#                data=temp)
+# #make prediction
+# predictions <- predict(model, newdata=shootings_cure)
+# temp <- cbind(shootings_cure, predictions)
+# temp <- temp %>% filter(curePrecinct) %>% group_by(year) %>% 
+#   summarise(numShootings = mean(numShootings), predicted=mean(predictions))
+# plt <- ggplot(data=temp) +
+#   geom_line(aes(x=year, y=numShootings, color='Cure'))+
+#   geom_line(aes(x=year, y=predicted, color='Counterfactual'))+
+#   geom_point_interactive(aes(x=year, y=numShootings,
+#                              tooltip=round(numShootings,digits=0)), size=2) +
+#   geom_point_interactive(aes(x=year, y=predicted,
+#                              tooltip=round(predicted,digits=0)), size=2) +
+#   #ylim(0,70)+
+#   labs(x="Year", y="Number of Shootings",color="") +
+#   theme_nycc()
+# saveWidget(girafe(ggobj=plt),file.path(figPth,"numShootings_cureCntrFctl.html"))
+# ggsave(file.path(figPth,"numShootings_cureCntrFctl.png"), plt, width=5, height=4, units="in")
+```
