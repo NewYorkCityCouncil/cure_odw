@@ -2,9 +2,7 @@
 
 ## Building Safer Communities – Evaluating Cure Violence Program’s Impact in NYC (March 19, 2024 at 6pm)
 [Event Link](https://2024.open-data.nyc/event/building-safer-communities-evaluating-cure-violence-programs-impact-in-nyc/) |
-[Panelist Bios](https://docs.google.com/document/d/1S1RpwWvjlZOSx-pfOdtpbCPXDWc-XfsFPf1SXxGr0wQ/edit?usp=sharing)
-
-An associated webpage for this analysis can be found here: https://council.nyc.gov/data/cure/.
+[Panelist Bios](https://docs.google.com/document/d/1S1RpwWvjlZOSx-pfOdtpbCPXDWc-XfsFPf1SXxGr0wQ/edit?usp=sharing) | An associated webpage for this analysis can be found [here](https://council.nyc.gov/data/cure/).
 
 ### Background
 In the wake of a rebound in shootings and homicides since the Covid-19 pandemic, as well as high profile cases of gun violence across the country, violent crime has become a top concern for many New Yorkers. Overall, New York City has a lower violent crime rate than most other large American cities—a rate that is near historic lows, with shootings and homicides down 23.2% and 11.4% respectively from last year. However, violent crime remains an ongoing issue in several hotspots around the city.
