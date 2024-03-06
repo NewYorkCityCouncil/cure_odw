@@ -1,0 +1,46 @@
+---
+title: "03_model"
+author: "Melissa Nunez"
+date: "5/23/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+################### Models ######################
+
+
+# Run negative binomial with offset using only prcincts with intervention
+mod_4_cure_precincts <- glmer.nb(shootings_count ~ scale(time) + factor(cure) + scale(time_after_int) + scale(arrests_count)  + offset(scale(log(p0010001))) + (1 |precinct), 
+    data = cure_analysis_data %>% filter(precinct %in% programs_20$precinct))
+
+summary(mod_4_cure_precincts)
+
+# Run negative binomial with offset using all precincts
+mod_5_all_precincts <- glmer.nb(shootings_count ~ scale(time) + factor(cure) + scale(time_after_int) + scale(arrests_count)  + offset(scale(log(p0010001))) + (1 |precinct), 
+    data = cure_analysis_data)
+
+summary(mod_5_all_precincts)
+
+#hist(cure_analysis_data[cure_analysis_data$precinct %in% programs_20$precinct, "shootings_count"], breaks=100)
+
+# Runnin same two models but with recoded time after intervention variable
+cure_analysis_data_recoded <- cure_analysis_data %>% mutate(time_after_int_recode=time_after_int-1) %>% mutate(time_after_int_recode=ifelse(time_after_int_recode==-1,0,time_after_int_recode))
+
+summary(glmer.nb(shootings_count ~ scale(time) + factor(cure) + scale(time_after_int_recode) + scale(arrests_count)  + offset(scale(log(p0010001))) + (1 |precinct), 
+    data = cure_analysis_data_recoded))
+
+summary(glmer.nb(shootings_count ~ scale(time) + factor(cure) + scale(time_after_int_recode) + scale(arrests_count)  + offset(scale(log(p0010001))) + (1 |precinct), 
+    data = cure_analysis_data_recoded %>% filter(precinct %in% programs_20$precinct)))
+
+# Recide dataset with 2020 time point
+cure_analysis_data_2020_final_recoded <- cure_analysis_data_2020_final %>% mutate(time_after_int_recode=time_after_int-1) %>% mutate(time_after_int_recode=ifelse(time_after_int_recode==-1,0,time_after_int_recode))
+
+summary(glmer.nb(shootings_count ~ scale(time) + factor(cure) + scale(time_after_int_recode) + scale(arrests_count)  + offset(scale(log(p0010001))) + (1 |precinct), 
+    data = cure_analysis_data_2020_final_recoded))
+```
+

@@ -1,0 +1,76 @@
+---
+title: "01_map_shootings_2021"
+author: "Melissa Nunez"
+date: "5/23/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# run 00_read_data.Rmd
+```
+
+
+```{r}
+# Join 2021 shootings with precinct pop data and calculate shootings per person
+shootings_map_dat_2021 <- shootings_2021 %>% 
+  group_by(precinct) %>% 
+  summarize(count=n()) %>% 
+  mutate(percent=count/sum(count)) %>% 
+  left_join(precinct_pop %>% 
+              select(precinct_2020, p0010001), 
+            by=c("precinct"="precinct_2020")) %>% 
+  mutate(rate=count/p0010001)
+
+# Join shootings per person data with precinct shape file
+shootings_map_dat_2021.shp <- precinct.shp %>% 
+  left_join(shootings_map_dat_2021, by=c("precinct"))
+
+shootings_map_dat_2021.shp <- shootings_map_dat_2021.shp %>% 
+  st_as_sf() %>% st_transform('+proj=longlat +datum=WGS84')
+
+```
+
+```{r}
+# check column distribution
+ plot(density(shootings_map_dat_2021.shp$rate, na.rm = T))
+ hist(shootings_map_dat_2021.shp$rate, breaks = 20)
+# large skew, maybe jenks or head/tail classification
+
+int_prct <- classIntervals(shootings_map_dat_2021.shp$rate, 
+                           n = 5, style = 'headtails')
+# Create color palete
+palPct = colorBin(
+  palette = nycc_pal("cool")(7),
+  bins = int_prct$brks,
+  domain = shootings_map_dat_2021.shp$rate, 
+  na.color = "#E6E6E6", 
+  reverse = FALSE
+)
+```
+
+```{r}
+# Map 2021 shootings per person by precinct and outline (in black) the precincts who had a cure program
+m <- leaflet() %>%
+
+  addPolygons(data = shootings_map_dat_2021.shp,
+              weight = 1,
+              fillColor = ~palPct(rate),
+              color="white",
+              stroke = TRUE,
+              fillOpacity = 1) %>%
+  addPolygons(data = shootings_map_dat_2021.shp %>% 
+              filter(precinct %in% program_dates$precinct),
+              weight = 1,
+              color="Black",
+              stroke = TRUE,
+              fillOpacity = 0) %>% 
+  addCouncilStyle() %>% 
+  addLegend_decreasing(position ="topleft",  
+             pal= pal, 
+             values = shootings_map_dat_2021.shp *100000, 
+             title = "Shootings Per 100K", 
+             labFormat = labelFormat(digits = 1), 
+             opacity = 1)
+```
+

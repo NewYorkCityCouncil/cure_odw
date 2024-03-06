@@ -1,0 +1,49 @@
+---
+title: "00_read_data"
+author: "Melissa Nunez"
+date: "5/23/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("../code/00_load_dependencies.R")
+```
+
+```{r}
+# Read in all data used
+# Shootings
+shootings_historical <-
+ #read.csv("../data/input/NYPD_Shooting_Incident_Data__Historic_-2.csv")
+  fread("https://data.cityofnewyork.us/resource/833y-fsy8.csv?$limit=9999999999999999") %>% clean_names()
+
+shootings_2021 <- 
+  #read.csv("../data/input/NYPD_Shooting_Incident_Data__Year_To_Date_-2.csv")
+  fread("https://data.cityofnewyork.us/resource/5ucz-vwe8.csv?$limit=9999999999999") %>% clean_names()
+
+# Separate the date into diff columns
+shootings_historical <- separate(shootings_historical,occur_date,c("month","day","year"),sep="-", remove=FALSE)
+
+# Arrests
+arrests_historical <- vroom("https://data.cityofnewyork.us/resource/8h9b-rp9u.csv?$limit=9999999") %>% clean_names()
+
+# Separate the date into diff columns
+arrests_historical <- separate(arrests_historical,arrest_date,c("month","day","year"),sep="-", remove=FALSE)
+
+# Population by precinct
+precinct_pop <- read.csv("../data/input/nyc_2010pop_2020precincts.csv") %>% clean_names()
+
+# Program dates
+program_dates <- read_excel("../data/input/CMS\ List\ 1.6.22\ for\ NYCC\ .xlsx") %>% clean_names()
+
+# Separate and filter program dates
+programs_21 <- program_dates %>% separate(date_text, c("year","month")) %>% filter(year<=21) %>% mutate(waves=21-as.numeric(year))
+
+# Precinct shape file
+precinct.shp <- st_read(unzip_sf("https://data.cityofnewyork.us/api/geospatial/78dh-3ptz?method=export&format=Shapefile")) %>%  st_transform('+proj=longlat +datum=WGS84')
+
+boro <- read_sf("https://data.cityofnewyork.us/api/geospatial/tqmj-j8zm?method=export&format=GeoJSON") %>% 
+  st_transform("+proj=longlat +datum=WGS84") %>% 
+  st_simplify(dTolerance = .00001)
+```
+

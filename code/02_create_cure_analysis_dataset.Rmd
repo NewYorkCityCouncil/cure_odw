@@ -1,0 +1,123 @@
+---
+title: "02_create_cure_analysis_dataset"
+author: "Melissa Nunez"
+date: "5/23/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# There is one precinct (precinct 75) with two cure programs (in different neighborhoods). We keep the intervention that started first (has more follow up data)
+# Remove duplicate with the later start date
+programs_20 <- programs_20[-15,]
+
+programs_20$year <- paste(20,programs_20$year,sep="")
+
+prec_pop_cure <- precinct_pop %>% dplyr::select(precinct_2020, p0010001) %>% dplyr::left_join(programs_20, by = c("precinct_2020"="precinct")) %>% dplyr::mutate(cure=ifelse(precinct_2020 %in% programs_20$precinct,"yes", "no")) %>% dplyr::select(precinct_2020, p0010001,council_district,year, month,cure)
+
+# Why did I kick out precinct 22? I don't think 22nd precinct exists
+# Create data frame with precinct and shootings for each year starting in 2006
+shootings_precinct <- data.frame(data.frame(precinct=rep(precinct_pop$precinct_2020, 14)) %>% arrange(precinct),years_since=rep(2006:2019, 7)) %>% filter(precinct!=22) %>% bind_cols(shootings_historical %>% group_by(precinct,year) %>% summarize(shootings_count=n()) %>% ungroup() %>% complete(precinct, year=unique(shootings_historical$year), fill = list(shootings_count = 0)))
+
+# Add precinct population
+cure_full_dataset <- shootings_precinct %>% left_join(prec_pop_cure,by=c("precinct...1"="precinct_2020")) %>% mutate(cure=0)
+
+
+# Make cure variable 1 if intervention has been implemented
+for (i in 1:dim(cure_full_dataset)[1]){
+if(!is.na(cure_full_dataset$year.y[i]) && cure_full_dataset$year.y[i]<=cure_full_dataset$year.x[i]){
+  cure_full_dataset$cure[i]=1
+} else {
+  cure_full_dataset$cure[i]=0
+}
+}
+
+# Initiate time after intervention variable
+cure_full_dataset$time_after_int <- 0
+
+# Make time after intervention variable increase for every year cure has been implemented
+cure_full_dataset <- cure_full_dataset %>% dplyr::group_by(grp = cumsum(cure==0)) %>%
+  dplyr::mutate(time_after_int = ifelse(cure==1, lag(cumsum(cure==1))+1,0)) %>% 
+  ungroup() %>% 
+  dplyr::select(-grp) %>%
+  as.data.frame()
+
+# Create time variable
+cure_full_dataset$time <- rep(1:14,76)
+
+# Take out duplicative variables that occurred during all pof my joining and create shootings per person variable
+cure_analysis_data <- cure_full_dataset %>% dplyr::select(precinct...1,year.x,time,cure,time_after_int, p0010001,shootings_count) %>% dplyr::mutate(shootings_per_person=shootings_count/p0010001)
+
+
+arrests_yearly <- arrests_historical %>% group_by(arrest_precinct,year) %>% summarize(arrests_count=n()) %>% ungroup() %>% complete(arrest_precinct, year=unique(arrests_historical$year), fill = list(arrests_count = 0)) %>% filter(arrest_precinct!=22, arrest_precinct!=27)
+
+cure_analysis_data <- cure_analysis_data %>% bind_cols(arrests_yearly) %>% dplyr::mutate(arrests_per_pop=arrests_count/p0010001) %>% dplyr::mutate(cure=factor(cure))
+
+#data.frame(unique(arrests_historical$arrest_precinct)) %>% anti_join(data.frame(unique(shootings_historical$precinct)), by = c("unique.arrests_historical.arrest_precinct."="unique.shootings_historical.precinct."))
+
+ggplot(cure_analysis_data %>% filter(precinct%in%programs_20$precinct) %>% left_join(programs_20, by="precinct"), aes(x = as.numeric(year.x), y = shootings_count, group=precinct, color=factor(precinct))) +
+  geom_point() +
+  geom_smooth(method="loess", span = 0.4, se=FALSE, aes(colour=factor(precinct))) +
+  theme_bw() +
+  geom_vline(aes(xintercept = as.numeric(year.y)), color = "red") +
+  labs(colour="") + facet_wrap(~year.y)
+
+#programs_20 %>% group_by(precinct, year) %>% summarize(count=n()) %>% arrange(year)
+```
+
+
+# Estimate 2020 time point
+```{r}
+#shootings_historical %>% mutate(date=as.Date(occur_date, format="%m/%d/%Y"), month=as.numeric(month), day=as.numeric(day)) %>% filter(month %in% c(1:3)) %>% filter(ifelse(month==3,day<=15, day %in% c(1:31))) %>% group_by(year) %>% summarize(count=n()) %>% left_join(shootings_historical %>% group_by(year) %>% summarize(count=n()), by="year") %>% mutate(percent=count.x/count.y*100, percent=round(percent,2)) %>% filter(year>=2012) %>% summarize(avg=mean(percent))
+
+#arrests_historical %>% mutate(date=as.Date(arrest_date, format="%m/%d/%Y"), month=as.numeric(month), day=as.numeric(day)) %>% filter(month %in% c(1:3)) %>% filter(ifelse(month==3,day<=15, day %in% c(1:31))) %>% group_by(year) %>% summarize(count=n()) %>% left_join(arrests_historical %>% group_by(year) %>% summarize(count=n()), by="year") %>% mutate(percent=count.x/count.y*100, percent=round(percent,2)) %>% filter(year>=2012) %>% summarize(avg=mean(percent))
+
+```
+
+# Add new time point to datset
+```{r}
+# Read 2020 data
+shootings_2020 <- read.csv("https://data.cityofnewyork.us/resource/833y-fsy8.csv?$query=SELECT%0A%20%20%60incident_key%60%2C%0A%20%20%60occur_date%60%2C%0A%20%20%60occur_time%60%2C%0A%20%20%60boro%60%2C%0A%20%20%60loc_of_occur_desc%60%2C%0A%20%20%60precinct%60%2C%0A%20%20%60jurisdiction_code%60%2C%0A%20%20%60loc_classfctn_desc%60%2C%0A%20%20%60location_desc%60%2C%0A%20%20%60statistical_murder_flag%60%2C%0A%20%20%60perp_age_group%60%2C%0A%20%20%60perp_sex%60%2C%0A%20%20%60perp_race%60%2C%0A%20%20%60vic_age_group%60%2C%0A%20%20%60vic_sex%60%2C%0A%20%20%60vic_race%60%2C%0A%20%20%60x_coord_cd%60%2C%0A%20%20%60y_coord_cd%60%2C%0A%20%20%60latitude%60%2C%0A%20%20%60longitude%60%2C%0A%20%20%60geocoded_column%60%2C%0A%20%20%60%3A%40computed_region_yeji_bk3q%60%2C%0A%20%20%60%3A%40computed_region_92fq_4b7q%60%2C%0A%20%20%60%3A%40computed_region_sbqj_enih%60%2C%0A%20%20%60%3A%40computed_region_efsh_h5xi%60%2C%0A%20%20%60%3A%40computed_region_f5dn_yrer%60%0AWHERE%0A%20%20%60occur_date%60%0A%20%20%20%20BETWEEN%20%222020-01-01T00%3A00%3A00%22%20%3A%3A%20floating_timestamp%0A%20%20%20%20AND%20%222020-03-15T12%3A59%3A59%22%20%3A%3A%20floating_timestamp")
+
+# 2020 data point
+data_point_precinct_2020 <- shootings_2020 %>% group_by(precinct) %>% summarize(count=n()) %>% mutate(total_shootings=round(count/.157375,0))
+
+#colnames(cure_analysis_data)
+
+arrests_2020 <- read.csv("https://data.cityofnewyork.us/resource/8h9b-rp9u.csv?$query=SELECT%0A%20%20%60arrest_key%60%2C%0A%20%20%60arrest_date%60%2C%0A%20%20%60pd_cd%60%2C%0A%20%20%60pd_desc%60%2C%0A%20%20%60ky_cd%60%2C%0A%20%20%60ofns_desc%60%2C%0A%20%20%60law_code%60%2C%0A%20%20%60law_cat_cd%60%2C%0A%20%20%60arrest_boro%60%2C%0A%20%20%60arrest_precinct%60%2C%0A%20%20%60jurisdiction_code%60%2C%0A%20%20%60age_group%60%2C%0A%20%20%60perp_sex%60%2C%0A%20%20%60perp_race%60%2C%0A%20%20%60x_coord_cd%60%2C%0A%20%20%60y_coord_cd%60%2C%0A%20%20%60latitude%60%2C%0A%20%20%60longitude%60%2C%0A%20%20%60lon_lat%60%2C%0A%20%20%60%3A%40computed_region_efsh_h5xi%60%2C%0A%20%20%60%3A%40computed_region_f5dn_yrer%60%2C%0A%20%20%60%3A%40computed_region_yeji_bk3q%60%2C%0A%20%20%60%3A%40computed_region_92fq_4b7q%60%2C%0A%20%20%60%3A%40computed_region_sbqj_enih%60")
+
+data_point_arrests_precinct_2020 <- arrests_2020 %>% group_by(arrest_precinct) %>% summarize(count=n()) %>% mutate(total_arrests=round(count/.2165625,0))
+
+
+cure_analysis_data_2020 <- data_point_precinct_2020 %>% select(precinct, total_shootings) %>% mutate(year.x=2020, time=15,cure=1, time_after_int=0) %>% left_join(precinct_pop %>% select(precinct_2020, p0010001), by=c("precinct"="precinct_2020")) %>% mutate(shootings_per_person=total_shootings/p0010001) %>% left_join(data_point_arrests_precinct_2020 %>% select(arrest_precinct, total_arrests), by=c("precinct"="arrest_precinct")) %>% mutate(arrests_per_pop=total_arrests/p0010001) %>% rename(shootings_count=total_shootings, arrests_count=total_arrests)
+
+cure_analysis_data_2020 <- cure_analysis_data_2020 %>% select(precinct, year.x, time, cure, time_after_int, p0010001, shootings_count, shootings_per_person,arrests_count, arrests_per_pop)
+
+cure_analysis_data_2020 <- cure_analysis_data %>% select(-year, -arrest_precinct) %>% mutate(year.x=as.numeric(year.x)) %>% bind_rows(cure_analysis_data_2020 %>% mutate(cure=factor(cure))) %>% complete(precinct, year.x=as.numeric(c(unique(shootings_historical$year), 2020)), fill = list(shootings_count = 0)) %>% arrange(precinct)
+
+cure_analysis_data_2020[cure_analysis_data_2020$precinct==60 & cure_analysis_data_2020$year.x==2020,] <- cure_analysis_data_2020 %>% filter(precinct==60 & year.x==2020) %>% mutate(time=15, cure=factor(1),time_after_int=0, p0010001=104278, shootings_per_person=0, arrests_count=46, arrests_per_pop=46/p0010001)
+
+# Initiate time after intervention variable
+cure_analysis_data_2020$time_after_int <- 0
+
+# Make time after intervention variable increase for every year cure has been implemented
+cure_analysis_data_2020_final <- cure_analysis_data_2020 %>% filter(precinct %in% programs_20$precinct) %>% dplyr::group_by(grp = cumsum(cure==0)) %>%
+  dplyr::mutate(time_after_int = ifelse(cure==1, lag(cumsum(cure==1))+1,0)) %>% 
+  ungroup() %>% 
+  dplyr::select(-grp) %>%
+  as.data.frame()
+                                                                                    
+
+```
+
+
+
+
+
+
+
+
