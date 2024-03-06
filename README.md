@@ -1,4 +1,4 @@
-# Cure Violence Program in NYC
+# Cure Violence Program in NYC - Open Data Week 
 
 ## Building Safer Communities – Evaluating Cure Violence Program’s Impact in NYC (March 19, 2024 at 6pm)
 [Event Link](https://2024.open-data.nyc/event/building-safer-communities-evaluating-cure-violence-programs-impact-in-nyc/) |
