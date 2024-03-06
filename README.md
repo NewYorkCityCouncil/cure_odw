@@ -43,13 +43,10 @@ The City Council's Data Team hopes to further expand on this analysis to better 
 Code
 - 00_load_dependencies.R Load packages neccessary for analysis
 - 00_read_data.Rmd Read in data files found in data folder
-- 01_cohort_map.R Map of precincts with cure violence programs
-- 01_map_shootings_2021.Rmd Map 2021 shootings per person by precinct and outline
+- 01_cohort_map.R Map of precincts with Cure Violence programs
+- 01_eventStudy_ek.Rmd Additional work using event study and exploring spillover effects
 - 02_create_cure_analysis_dataset.Rmd Create dataset used for modeling/analysis
 - 02_precinct-shooting-averages-dataset_2006_2012.ipynb Calculate shooting averages by precinct for 2006-2012
-- 02_precinct-shootings-change-dataset_2011_2020.ipynb Calculate shooting averages by precinct for 2011-2020
 - 03_model.Rmd Run mixed negative binomial model with offset
-- 04_map-shooting-averages_by-precinct_2006_2012.R Map shooting averages by precinct
-- 04_wedge-table_precinct-shootings-change_2011-2020.R Create wedge table for shootings
-- eventStudy_ek.Rmd Additional work using event study and exploring spillover effects
+- 04_map-shooting-averages_by-precinct_2006_2012.R Map shooting averages by precinct (7-year average)
 
