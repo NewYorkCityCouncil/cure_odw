@@ -20,9 +20,9 @@ The Council’s Data Team presents an in-house statistical analysis of the Cure 
 
 ### Methods
 #### Structure and Model
-We model the impact of Cure through the use of a linear model. Precincts entered the Cure Violence program at different points in time from 2012 and 2019, which produces a time-varying introductory process known as a step-wedge design.
+We model the impact of Cure through the use of a linear model. Precincts entered the Cure Violence program at different points in time from 2012 and 2021, which produces a time-varying introductory process known as a step-wedge design.
 
-Longitudinal data on shootings spanning from 2006 to 2020 are analyzed. Because of the impact of Covid-19 on crime levels, the 2020 shooting and arrest rates are extrapolated using the pre-Covid data as well as the past 7-year annual time distribution of shootings. What culminated was a segmented regression model, which is used for “statistically modeling interrupted time series data to draw more formal conclusions about the impact of an intervention or event on the measure of interest.” More specifically, a segmented negative-binomial model was used.
+Longitudinal data on shootings spanning from 2006 to 2023 are analyzed. What culminated was a segmented regression model, which is used for “statistically modeling interrupted time series data to draw more formal conclusions about the impact of an intervention or event on the measure of interest.” More specifically, a segmented negative-binomial model was used.
 
 #### Outcome of Interest
 Our measure of interest is variation in the number of shootings in each precinct. We include a random effect for precincts to account for correlation within group samples. We are also interested in accounting for anything that may have impacted overall tendency for crime to occur. This could include economic or policy changes. Arrest data is used as a proxy for this, and included as a covariate in the model.
