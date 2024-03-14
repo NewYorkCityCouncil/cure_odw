@@ -42,7 +42,8 @@ Based on this analysis, Cure appears to have an immediate impact on gun violence
 
 ### Limitations
 - Our study was not a randomized controlled trial, which is considered the gold standard for assessing the causal effect of an intervention or treatment. 
-- We analyzed the effect of Cure at the precinct-level, yet each program covers a smaller catchment area within their precinct. Due to lack of available data on catchment area boundaries, using gun violence data at the precinct-level was the next best option. This may have ultimately led our study to underestimate the effectiveness of Cure, given that it assumes areas (in Cure precincts) outside of the catchment area are treated. 
+- We analyzed the effect of Cure at the precinct-level, yet each program covers a smaller catchment area within their precinct. Due to lack of available data on catchment area boundaries, using gun violence data at the precinct-level was the next best option. This may have ultimately led our study to underestimate the effectiveness of Cure, given that it assumes areas (in Cure precincts) outside of the catchment area are treated.
+- Due to the interpersonal nature of Cure, Covid may have reduced the effectiveness of Cure. If this is the case, by including precincts that received Cure in 2019 and 2021, we may be underrepresenting Cure’s effectiveness.
 - Our study assumed that the implementation of Cure was homogeneous across all precincts, which is likely untrue. 
 - Given that Cure is just one element of New York City's Crisis Management System (CMS), it is challenging to parse out the impact of Cure alone. While Cure is considered the core of CMS, each precinct has a different mix of wrap-around services operating alongside Cure.
 
