@@ -3,7 +3,7 @@
 ## Building Safer Communities – Evaluating Cure Violence Program’s Impact in NYC
 (March 19, 2024 at 6pm) 
 
-[Event Link](https://2024.open-data.nyc/event/building-safer-communities-evaluating-cure-violence-programs-impact-in-nyc/) |
+[Event Link](https://2024.open-data.nyc/event/building-safer-communities-evaluating-cure-violence-programs-impact-in-nyc/) & [Slides](https://www.canva.com/design/DAF_VOzPDIQ/63-oC4ywSGFHofP29T2t2w/view?utm_content=DAF_VOzPDIQ&utm_campaign=designshare&utm_medium=link&utm_source=editor) |
 [Panelist Bios](https://docs.google.com/document/d/1S1RpwWvjlZOSx-pfOdtpbCPXDWc-XfsFPf1SXxGr0wQ/edit?usp=sharing) | A webpage for this analysis can be found [here](https://council.nyc.gov/data/cure/).
 ***
 
